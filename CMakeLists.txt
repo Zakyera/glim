@@ -15,6 +15,15 @@ option(BUILD_WITH_VIEWER "Build with visualizer" ON)
 option(BUILD_WITH_MARCH_NATIVE "Build with -march=native" OFF)
 option(BUILD_WITH_OPENCV "Build with OpenCV to support camera images" ON)
 
+if(DEFINED ENV{ROS_VERSION})
+  if($ENV{ROS_VERSION} EQUAL 1)
+    find_package(catkin REQUIRED)
+    set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CATKIN_DEVEL_PREFIX}/${CATKIN_PACKAGE_LIB_DESTINATION})
+    set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CATKIN_DEVEL_PREFIX}/${CATKIN_PACKAGE_LIB_DESTINATION})
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CATKIN_DEVEL_PREFIX}/${CATKIN_PACKAGE_BIN_DESTINATION})
+  endif()
+endif()
+
 if(BUILD_WITH_MARCH_NATIVE)
   add_definitions(-march=native)
   add_definitions(-DBUILD_WITH_MARCH_NATIVE)
@@ -28,6 +37,12 @@ find_package(GTSAM 4.2 REQUIRED)
 find_package(gtsam_points 1.2.0 REQUIRED)
 find_package(OpenMP REQUIRED)
 find_package(spdlog REQUIRED)
+
+if(TARGET gtsam_eigen3)
+  set(GLIM_EIGEN_TARGET gtsam_eigen3)
+else()
+  set(GLIM_EIGEN_TARGET Eigen3::Eigen)
+endif()
 
 if(BUILD_WITH_VIEWER)
   find_package(Iridescence REQUIRED)
@@ -107,7 +122,7 @@ target_include_directories(glim PUBLIC
 target_link_libraries(glim
   Boost::boost
   Boost::serialization
-  Eigen3::Eigen
+  ${GLIM_EIGEN_TARGET}
   gtsam
   gtsam_points::gtsam_points
   OpenMP::OpenMP_CXX
@@ -265,7 +280,6 @@ if(DEFINED ENV{ROS_VERSION})
     ament_package(CONFIG_EXTRAS "cmake/glim-config.cmake.in")
   elseif($ENV{ROS_VERSION} EQUAL 1)
     # ROS1
-    find_package(catkin REQUIRED)
     catkin_package(
       INCLUDE_DIRS include
       LIBRARIES ${glim_LIBRARIES} ${GTSAM_LIBRARIES} fmt spdlog::spdlog
