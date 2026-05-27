@@ -66,6 +66,7 @@ private:
 private:
   // Keyframe params
   int entropy_num_frames;
+  int last_keyframe_overlap_calls;
   double entropy_running_average;
   std::vector<EstimationFrame::ConstPtr> keyframes;
 

@@ -2,6 +2,7 @@
 
 #include <spdlog/spdlog.h>
 #include <glim/util/logging.hpp>
+#include <glim/util/timing.hpp>
 
 namespace glim {
 
@@ -62,6 +63,8 @@ void AsyncOdometryEstimation::run() {
   while (!kill_switch) {
     auto imu_frames = input_imu_queue.get_all_and_clear();
     auto new_raw_frames = input_frame_queue.get_all_and_clear();
+    const size_t imu_batch_count = imu_frames.size();
+    const size_t frame_batch_count = new_raw_frames.size();
     raw_frames.insert(raw_frames.end(), new_raw_frames.begin(), new_raw_frames.end());
     internal_frame_queue_size = raw_frames.size();
 
@@ -114,7 +117,23 @@ void AsyncOdometryEstimation::run() {
     while (!raw_frames.empty()) {
       if (!end_of_sequence && raw_frames.front()->scan_end_time > last_imu_time) {
         logger->debug("waiting for IMU data (scan_end_time={:.6f}, last_imu_time={:.6f} |frames|={})", raw_frames.front()->scan_end_time, last_imu_time, raw_frames.size());
+        const auto wait_start = TimingClock::now();
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        const double wait_ms = timing_enabled() ? timing_elapsed_ms(wait_start) : 0.0;
+        if (timing_enabled()) {
+          logger->info(
+            "GLIM_ASYNC_ODOM_TIMING_ROW,{:.9f},{:.9f},{:.9f},{},{},{},{:.6f},0,0,{},{},{},waiting_for_imu",
+            raw_frames.front()->stamp,
+            raw_frames.front()->scan_end_time,
+            last_imu_time,
+            raw_frames.size(),
+            imu_batch_count,
+            frame_batch_count,
+            wait_ms,
+            raw_frames.size(),
+            0,
+            0);
+        }
 
         if (raw_frames.size() > 10) {
           logger->warn("waiting for IMU data (scan_end_time={:.6f}, last_imu_time={:.6f} |frames|={})", raw_frames.front()->scan_end_time, last_imu_time, raw_frames.size());
@@ -124,13 +143,31 @@ void AsyncOdometryEstimation::run() {
       }
 
       const auto& frame = raw_frames.front();
+      const auto process_start = TimingClock::now();
       std::vector<EstimationFrame::ConstPtr> marginalized;
       auto state = odometry_estimation->insert_frame(frame, marginalized);
+      const double odom_insert_ms =
+        timing_enabled() ? timing_elapsed_ms(process_start) : 0.0;
 
       output_estimation_results.push_back(state);
       output_marginalized_frames.insert(marginalized);
       raw_frames.pop_front();
       internal_frame_queue_size = raw_frames.size();
+      if (timing_enabled()) {
+        logger->info(
+          "GLIM_ASYNC_ODOM_TIMING_ROW,{:.9f},{:.9f},{:.9f},{},{},{},0,{:.6f},{:.6f},{},{},{},processed",
+          frame->stamp,
+          frame->scan_end_time,
+          last_imu_time,
+          raw_frames.size() + 1u,
+          imu_batch_count,
+          frame_batch_count,
+          odom_insert_ms,
+          odom_insert_ms,
+          raw_frames.size(),
+          state ? 1 : 0,
+          marginalized.size());
+      }
     }
   }
 

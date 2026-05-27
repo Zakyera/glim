@@ -12,6 +12,7 @@
 
 #include <glim/util/config.hpp>
 #include <glim/util/convert_to_string.hpp>
+#include <glim/util/timing.hpp>
 #include <glim/common/imu_integration.hpp>
 #include <glim/common/imu_validation.hpp>
 #include <glim/common/cloud_deskewing.hpp>
@@ -129,6 +130,8 @@ EstimationFrame::ConstPtr OdometryEstimationIMU::insert_frame(const Preprocessed
 
   const int current = frames.size();
   const int last = current - 1;
+  const bool timing = timing_enabled();
+  const auto total_start = TimingClock::now();
 
   // The very first frame
   if (frames.empty()) {
@@ -226,17 +229,21 @@ EstimationFrame::ConstPtr OdometryEstimationIMU::insert_frame(const Preprocessed
   gtsam::FixedLagSmootherKeyTimestampMap new_stamps;
 
   const double last_stamp = frames[last]->stamp;
+  const auto state_lookup_start = TimingClock::now();
   const auto last_T_world_imu_ = smoother->calculateEstimate<gtsam::Pose3>(X(last));
   const auto last_T_world_imu = gtsam::Pose3(last_T_world_imu_.rotation().normalized(), last_T_world_imu_.translation());
   const auto last_v_world_imu = smoother->calculateEstimate<gtsam::Vector3>(V(last));
   const auto last_imu_bias = smoother->calculateEstimate<gtsam::imuBias::ConstantBias>(B(last));
   const gtsam::NavState last_nav_world_imu(last_T_world_imu, last_v_world_imu);
+  const double state_lookup_ms = timing ? timing_elapsed_ms(state_lookup_start) : 0.0;
 
   // IMU integration between LiDAR scans (inter-scan)
+  const auto inter_scan_imu_start = TimingClock::now();
   int num_imu_integrated = 0;
   const int imu_read_cursor = imu_integration->integrate_imu(last_stamp, raw_frame->stamp, last_imu_bias, &num_imu_integrated);
   imu_integration->erase_imu_data(imu_read_cursor);
   logger->trace("num_imu_integrated={}", num_imu_integrated);
+  const double inter_scan_imu_ms = timing ? timing_elapsed_ms(inter_scan_imu_start) : 0.0;
 
   // IMU state prediction
   const gtsam::NavState predicted_nav_world_imu = imu_integration->integrated_measurements().predict(last_nav_world_imu, last_imu_bias);
@@ -259,6 +266,7 @@ EstimationFrame::ConstPtr OdometryEstimationIMU::insert_frame(const Preprocessed
   new_values.insert(B(current), last_imu_bias);
 
   // Constant IMU bias assumption
+  const auto imu_factor_start = TimingClock::now();
   new_factors.add(
     gtsam::BetweenFactor<gtsam::imuBias::ConstantBias>(B(last), B(current), gtsam::imuBias::ConstantBias(), gtsam::noiseModel::Isotropic::Sigma(6, params->imu_bias_noise)));
   if (params->fix_imu_bias) {
@@ -275,11 +283,14 @@ EstimationFrame::ConstPtr OdometryEstimationIMU::insert_frame(const Preprocessed
     logger->warn("t_last={:.6f} t_current={:.6f} num_imu={}", last_stamp, raw_frame->stamp, num_imu_integrated);
     new_factors.add(gtsam::BetweenFactor<gtsam::Vector3>(V(last), V(current), gtsam::Vector3::Zero(), gtsam::noiseModel::Isotropic::Sigma(3, 1.0)));
   }
+  const double imu_factor_ms = timing ? timing_elapsed_ms(imu_factor_start) : 0.0;
 
   // Motion prediction for deskewing (intra-scan)
+  const auto intra_scan_imu_start = TimingClock::now();
   std::vector<double> pred_imu_times;
   std::vector<Eigen::Isometry3d> pred_imu_poses;
   imu_integration->integrate_imu(raw_frame->stamp, raw_frame->scan_end_time, predicted_nav_world_imu, last_imu_bias, pred_imu_times, pred_imu_poses);
+  const double intra_scan_imu_ms = timing ? timing_elapsed_ms(intra_scan_imu_start) : 0.0;
 
   // Create EstimationFrame
   EstimationFrame::Ptr new_frame(new EstimationFrame);
@@ -304,15 +315,21 @@ EstimationFrame::ConstPtr OdometryEstimationIMU::insert_frame(const Preprocessed
   }
 
   // Deskew and tranform points into IMU frame
+  const auto deskew_start = TimingClock::now();
   auto deskewed = deskewing->deskew(T_imu_lidar, pred_imu_times, pred_imu_poses, raw_frame->stamp, raw_frame->times, raw_frame->points);
   for (auto& pt : deskewed) {
     pt = T_imu_lidar * pt;
   }
+  const double deskew_ms = timing ? timing_elapsed_ms(deskew_start) : 0.0;
 
+  const auto point_covariance_start = TimingClock::now();
   std::vector<Eigen::Vector4d> deskewed_normals;
   std::vector<Eigen::Matrix4d> deskewed_covs;
   covariance_estimation->estimate(deskewed, raw_frame->neighbors, deskewed_normals, deskewed_covs);
+  const double point_covariance_ms =
+    timing ? timing_elapsed_ms(point_covariance_start) : 0.0;
 
+  const auto cpu_frame_start = TimingClock::now();
   auto frame = std::make_shared<gtsam_points::PointCloudCPU>(deskewed);
   if (raw_frame->intensities.size()) {
     frame->add_intensities(raw_frame->intensities);
@@ -321,19 +338,35 @@ EstimationFrame::ConstPtr OdometryEstimationIMU::insert_frame(const Preprocessed
   frame->add_normals(deskewed_normals);
   new_frame->frame = frame;
   new_frame->frame_id = FrameID::IMU;
+  const double cpu_frame_ms = timing ? timing_elapsed_ms(cpu_frame_start) : 0.0;
+
+  const auto create_frame_start = TimingClock::now();
   create_frame(new_frame);
+  const double create_frame_ms = timing ? timing_elapsed_ms(create_frame_start) : 0.0;
 
   Callbacks::on_new_frame(new_frame);
   frames.push_back(new_frame);
 
+  const auto create_factors_start = TimingClock::now();
   new_factors.add(create_factors(current, imu_factor, new_values));
+  const double create_factors_ms = timing ? timing_elapsed_ms(create_factors_start) : 0.0;
 
   // Update smoother
+  const auto pre_smoother_callback_start = TimingClock::now();
   Callbacks::on_smoother_update(*smoother, new_factors, new_values, new_stamps);
+  const double pre_smoother_callback_ms =
+    timing ? timing_elapsed_ms(pre_smoother_callback_start) : 0.0;
+  const auto smoother_update_start = TimingClock::now();
   update_smoother(new_factors, new_values, new_stamps, 1);
+  const double smoother_update_ms =
+    timing ? timing_elapsed_ms(smoother_update_start) : 0.0;
+  const auto post_smoother_callback_start = TimingClock::now();
   Callbacks::on_smoother_update_finish(*smoother);
+  const double post_smoother_callback_ms =
+    timing ? timing_elapsed_ms(post_smoother_callback_start) : 0.0;
 
   // Find out marginalized frames
+  const auto marginalization_start = TimingClock::now();
   while (marginalized_cursor < current) {
     double span = frames[current]->stamp - frames[marginalized_cursor]->stamp;
     if (span < params->smoother_lag - 0.1) {
@@ -344,13 +377,18 @@ EstimationFrame::ConstPtr OdometryEstimationIMU::insert_frame(const Preprocessed
     frames[marginalized_cursor].reset();
     marginalized_cursor++;
   }
+  const double marginalization_ms =
+    timing ? timing_elapsed_ms(marginalization_start) : 0.0;
   logger->debug("|frames|={} |active|={} |marginalized|={}", frames.size(), frames.inner_size(), marginalized_frames.size());
   Callbacks::on_marginalized_frames(marginalized_frames);
 
   // Update frames
+  const auto update_frames_start = TimingClock::now();
   update_frames(current, new_factors);
+  const double update_frames_ms = timing ? timing_elapsed_ms(update_frames_start) : 0.0;
 
   // Check if IMU prediction is good or not
+  const auto imu_validation_start = TimingClock::now();
   imu_validation->validate(
     Eigen::Isometry3d(last_T_world_imu.matrix()),
     last_v_world_imu,
@@ -360,11 +398,45 @@ EstimationFrame::ConstPtr OdometryEstimationIMU::insert_frame(const Preprocessed
     new_frame->v_world_imu,
     new_frame->stamp - last_stamp);
   imu_validation->validate(new_frame->imu_bias);
+  const double imu_validation_ms =
+    timing ? timing_elapsed_ms(imu_validation_start) : 0.0;
 
+  const auto update_callbacks_start = TimingClock::now();
   std::vector<EstimationFrame::ConstPtr> active_frames(frames.inner_begin(), frames.inner_end());
   Callbacks::on_update_new_frame(active_frames.back());
   Callbacks::on_update_frames(active_frames);
+  const double update_callbacks_ms =
+    timing ? timing_elapsed_ms(update_callbacks_start) : 0.0;
   logger->trace("frames updated");
+
+  if (timing) {
+    logger->info(
+      "GLIM_ODOM_IMU_TIMING_ROW,{:.9f},{},{},{},{},{},{},{:.6f},{:.6f},{:.6f},{:.6f},{:.6f},{:.6f},{:.6f},{:.6f},{:.6f},{:.6f},{:.6f},{:.6f},{:.6f},{:.6f},{:.6f},{:.6f},{:.6f},processed",
+      raw_frame->stamp,
+      current,
+      raw_frame->size(),
+      num_imu_integrated,
+      new_factors.size(),
+      frames.inner_size(),
+      marginalized_frames.size(),
+      state_lookup_ms,
+      inter_scan_imu_ms,
+      imu_factor_ms,
+      intra_scan_imu_ms,
+      deskew_ms,
+      point_covariance_ms,
+      cpu_frame_ms,
+      create_frame_ms,
+      create_factors_ms,
+      pre_smoother_callback_ms,
+      smoother_update_ms,
+      post_smoother_callback_ms,
+      marginalization_ms,
+      update_frames_ms,
+      imu_validation_ms,
+      update_callbacks_ms,
+      timing_elapsed_ms(total_start));
+  }
 
   if (smoother->fallbackHappened()) {
     logger->warn("odometry estimation smoother fallback happened (time={})", raw_frame->stamp);
