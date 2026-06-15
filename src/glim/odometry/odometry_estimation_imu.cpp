@@ -21,6 +21,8 @@
 #include <glim/odometry/loose_initial_state_estimation.hpp>
 #include <glim/odometry/callbacks.hpp>
 
+#include <algorithm>
+
 #ifdef GTSAM_USE_TBB
 #include <tbb/task_arena.h>
 #endif
@@ -410,6 +412,7 @@ EstimationFrame::ConstPtr OdometryEstimationIMU::insert_frame(const Preprocessed
   logger->trace("frames updated");
 
   if (timing) {
+    const double total_ms = timing_elapsed_ms(total_start);
     logger->info(
       "GLIM_ODOM_IMU_TIMING_ROW,{:.9f},{},{},{},{},{},{},{:.6f},{:.6f},{:.6f},{:.6f},{:.6f},{:.6f},{:.6f},{:.6f},{:.6f},{:.6f},{:.6f},{:.6f},{:.6f},{:.6f},{:.6f},{:.6f},{:.6f},processed",
       raw_frame->stamp,
@@ -435,7 +438,36 @@ EstimationFrame::ConstPtr OdometryEstimationIMU::insert_frame(const Preprocessed
       update_frames_ms,
       imu_validation_ms,
       update_callbacks_ms,
-      timing_elapsed_ms(total_start));
+      total_ms);
+    if (Callbacks::on_timing) {
+      OdometryTimingStatus status;
+      status.stamp_sec = raw_frame->stamp;
+      status.frame_index = static_cast<std::size_t>(current);
+      status.point_count = static_cast<std::size_t>(raw_frame->size());
+      status.imu_integrated_count =
+        static_cast<std::size_t>(std::max(0, num_imu_integrated));
+      status.new_factor_count = new_factors.size();
+      status.active_frame_count = frames.inner_size();
+      status.marginalized_frame_count = marginalized_frames.size();
+      status.state_lookup_ms = state_lookup_ms;
+      status.inter_scan_imu_ms = inter_scan_imu_ms;
+      status.imu_factor_ms = imu_factor_ms;
+      status.intra_scan_imu_ms = intra_scan_imu_ms;
+      status.deskew_ms = deskew_ms;
+      status.point_covariance_ms = point_covariance_ms;
+      status.cpu_frame_ms = cpu_frame_ms;
+      status.create_frame_ms = create_frame_ms;
+      status.create_factors_ms = create_factors_ms;
+      status.pre_smoother_callback_ms = pre_smoother_callback_ms;
+      status.smoother_update_ms = smoother_update_ms;
+      status.post_smoother_callback_ms = post_smoother_callback_ms;
+      status.marginalization_ms = marginalization_ms;
+      status.update_frames_ms = update_frames_ms;
+      status.imu_validation_ms = imu_validation_ms;
+      status.update_callbacks_ms = update_callbacks_ms;
+      status.total_ms = total_ms;
+      Callbacks::on_timing(status);
+    }
   }
 
   if (smoother->fallbackHappened()) {

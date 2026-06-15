@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <map>
 #include <glim/util/callback_slot.hpp>
 #include <glim/odometry/estimation_frame.hpp>
@@ -21,6 +22,33 @@ class IncrementalFixedLagSmootherExtWithFallback;
 }  // namespace gtsam_points
 
 namespace glim {
+
+struct OdometryTimingStatus {
+  double stamp_sec = 0.0;
+  std::size_t frame_index = 0u;
+  std::size_t point_count = 0u;
+  std::size_t imu_integrated_count = 0u;
+  std::size_t new_factor_count = 0u;
+  std::size_t active_frame_count = 0u;
+  std::size_t marginalized_frame_count = 0u;
+  double state_lookup_ms = 0.0;
+  double inter_scan_imu_ms = 0.0;
+  double imu_factor_ms = 0.0;
+  double intra_scan_imu_ms = 0.0;
+  double deskew_ms = 0.0;
+  double point_covariance_ms = 0.0;
+  double cpu_frame_ms = 0.0;
+  double create_frame_ms = 0.0;
+  double create_factors_ms = 0.0;
+  double pre_smoother_callback_ms = 0.0;
+  double smoother_update_ms = 0.0;
+  double post_smoother_callback_ms = 0.0;
+  double marginalization_ms = 0.0;
+  double update_frames_ms = 0.0;
+  double imu_validation_ms = 0.0;
+  double update_callbacks_ms = 0.0;
+  double total_ms = 0.0;
+};
 
 /**
  * @brief IMU state initialization-related callbacks
@@ -128,6 +156,11 @@ struct OdometryEstimationCallbacks {
    * @param smoother     FixedLagSmoother
    */
   static CallbackSlot<void(gtsam_points::IncrementalFixedLagSmootherExtWithFallback& smoother)> on_smoother_update_finish;
+
+  /**
+   * @brief Odometry estimation timing callback.
+   */
+  static CallbackSlot<void(const OdometryTimingStatus& timing)> on_timing;
 
   /**
    * @brief Smoother corruption callback
