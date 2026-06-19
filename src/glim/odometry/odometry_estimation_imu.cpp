@@ -218,8 +218,10 @@ EstimationFrame::ConstPtr OdometryEstimationIMU::insert_frame(const Preprocessed
     new_factors.emplace_shared<gtsam_points::LinearDampingFactor>(B(0), 6, 1e6);
     new_factors.add(create_factors(current, nullptr, new_values));
 
-    Callbacks::on_smoother_update(*smoother, new_factors, new_values, new_stamps);
-    update_smoother(new_factors, new_values, new_stamps);
+    gtsam::FactorIndices factors_to_remove;
+    Callbacks::on_smoother_update(
+      *smoother, new_factors, new_values, new_stamps, factors_to_remove);
+    update_smoother(new_factors, new_values, new_stamps, factors_to_remove);
     Callbacks::on_smoother_update_finish(*smoother);
     update_frames(current, new_factors);
 
@@ -355,11 +357,13 @@ EstimationFrame::ConstPtr OdometryEstimationIMU::insert_frame(const Preprocessed
 
   // Update smoother
   const auto pre_smoother_callback_start = TimingClock::now();
-  Callbacks::on_smoother_update(*smoother, new_factors, new_values, new_stamps);
+  gtsam::FactorIndices factors_to_remove;
+  Callbacks::on_smoother_update(
+    *smoother, new_factors, new_values, new_stamps, factors_to_remove);
   const double pre_smoother_callback_ms =
     timing ? timing_elapsed_ms(pre_smoother_callback_start) : 0.0;
   const auto smoother_update_start = TimingClock::now();
-  update_smoother(new_factors, new_values, new_stamps, 1);
+  update_smoother(new_factors, new_values, new_stamps, factors_to_remove, 1);
   const double smoother_update_ms =
     timing ? timing_elapsed_ms(smoother_update_start) : 0.0;
   const auto post_smoother_callback_start = TimingClock::now();
@@ -522,12 +526,13 @@ void OdometryEstimationIMU::update_smoother(
   const gtsam::NonlinearFactorGraph& new_factors,
   const gtsam::Values& new_values,
   const std::map<std::uint64_t, double>& new_stamp,
+  const gtsam::FactorIndices& factors_to_remove,
   int update_count) {
 #ifdef GTSAM_USE_TBB
   auto arena = static_cast<tbb::task_arena*>(tbb_task_arena.get());
   arena->execute([&] {
 #endif
-    smoother->update(new_factors, new_values, new_stamp);
+    smoother->update(new_factors, new_values, new_stamp, factors_to_remove);
     for (int i = 0; i < update_count; i++) {
       smoother->update();
     }
@@ -541,7 +546,7 @@ void OdometryEstimationIMU::update_smoother(int count) {
     return;
   }
 
-  update_smoother(gtsam::NonlinearFactorGraph(), gtsam::Values(), std::map<std::uint64_t, double>(), count - 1);
+  update_smoother(gtsam::NonlinearFactorGraph(), gtsam::Values(), std::map<std::uint64_t, double>(), gtsam::FactorIndices(), count - 1);
 }
 
 }  // namespace glim

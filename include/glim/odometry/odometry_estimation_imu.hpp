@@ -5,6 +5,7 @@
 #include <random>
 
 #include <glim/odometry/odometry_estimation_base.hpp>
+#include <gtsam/inference/Factor.h>
 #include <gtsam/navigation/ImuFactor.h>
 #include <gtsam_points/util/gtsam_migration.hpp>
 #include <gtsam_points/util/indexed_sliding_window.hpp>
@@ -88,7 +89,7 @@ protected:
   virtual void update_frames(const int current, const gtsam::NonlinearFactorGraph& new_factors);
 
   virtual void
-  update_smoother(const gtsam::NonlinearFactorGraph& new_factors, const gtsam::Values& new_values, const std::map<std::uint64_t, double>& new_stamp, int update_count = 0);
+  update_smoother(const gtsam::NonlinearFactorGraph& new_factors, const gtsam::Values& new_values, const std::map<std::uint64_t, double>& new_stamp, const gtsam::FactorIndices& factors_to_remove = gtsam::FactorIndices(), int update_count = 0);
   virtual void update_smoother(int update_count = 1);
 
 protected:

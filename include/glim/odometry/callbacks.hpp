@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <map>
+#include <gtsam/inference/Factor.h>
 #include <glim/util/callback_slot.hpp>
 #include <glim/odometry/estimation_frame.hpp>
 
@@ -140,15 +141,17 @@ struct OdometryEstimationCallbacks {
 
   /**
    * @brief Odometry estimation optimization callback (just before optimization)
-   * @param smoother     FixedLagSmoother
-   * @param new_factors  New factors to be inserted into the graph
-   * @param new_values   New values to be inserted into the graph
-   */
+ * @param smoother     FixedLagSmoother
+ * @param new_factors  New factors to be inserted into the graph
+ * @param new_values   New values to be inserted into the graph
+ * @param factors_to_remove Existing factor slots to remove in this update
+ */
   static CallbackSlot<void(
     gtsam_points::IncrementalFixedLagSmootherExtWithFallback& smoother,
     gtsam::NonlinearFactorGraph& new_factors,
     gtsam::Values& new_values,
-    std::map<std::uint64_t, double>& new_stamps)>
+    std::map<std::uint64_t, double>& new_stamps,
+    gtsam::FactorIndices& factors_to_remove)>
     on_smoother_update;
 
   /**

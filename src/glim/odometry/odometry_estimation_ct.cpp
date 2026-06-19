@@ -229,12 +229,14 @@ EstimationFrame::ConstPtr OdometryEstimationCT::insert_frame(const PreprocessedF
   target_ivox->insert(*transformed);
 
   // Update smoother
-  Callbacks::on_smoother_update(*smoother, new_factors, new_values, new_stamps);
+  gtsam::FactorIndices factors_to_remove;
+  Callbacks::on_smoother_update(
+    *smoother, new_factors, new_values, new_stamps, factors_to_remove);
 #ifdef GTSAM_USE_TBB
   auto arena = static_cast<tbb::task_arena*>(tbb_task_arena.get());
   arena->execute([&] {
 #endif
-    smoother->update(new_factors, new_values, new_stamps);
+    smoother->update(new_factors, new_values, new_stamps, factors_to_remove);
 #ifdef GTSAM_USE_TBB
   });
 #endif

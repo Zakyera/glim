@@ -227,8 +227,10 @@ void StandardViewer::set_callbacks() {
                                                         gtsam_points::IncrementalFixedLagSmootherExtWithFallback& smoother,
                                                         gtsam::NonlinearFactorGraph& new_factors,
                                                         gtsam::Values& new_values,
-                                                        std::map<std::uint64_t, double>& new_stamps) {
+                                                        std::map<std::uint64_t, double>& new_stamps,
+                                                        gtsam::FactorIndices& factors_to_remove) {
     //
+    (void)factors_to_remove;
     std::vector<std::pair<std::weak_ptr<gtsam::NonlinearFactor>, FactorLineGetter>> new_factor_lines;
     new_factor_lines.reserve(new_factors.size());
 
