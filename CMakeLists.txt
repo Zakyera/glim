@@ -97,6 +97,7 @@ add_library(glim SHARED
   src/glim/odometry/loose_initial_state_estimation.cpp
   src/glim/odometry/odometry_estimation_base.cpp
   src/glim/odometry/async_odometry_estimation.cpp
+  src/glim/odometry/scan_dcreg_diagnostics.cpp
   src/glim/odometry/odometry_estimation_imu.cpp
   src/glim/odometry/odometry_estimation_ct.cpp
   src/glim/odometry/odometry_estimation_cpu.cpp
@@ -135,6 +136,15 @@ if(BUILD_WITH_OPENCV)
   target_compile_definitions(glim PUBLIC GLIM_USE_OPENCV)
 endif()
 list(APPEND glim_LIBRARIES glim)
+
+if(CATKIN_ENABLE_TESTING AND COMMAND catkin_add_gtest)
+  catkin_add_gtest(scan_dcreg_diagnostics_test
+    src/test/scan_dcreg_diagnostics_test.cpp
+  )
+  if(TARGET scan_dcreg_diagnostics_test)
+    target_link_libraries(scan_dcreg_diagnostics_test glim gtest_main)
+  endif()
+endif()
 
 # Create shared libraries for estimation modules
 list(APPEND module_srcs

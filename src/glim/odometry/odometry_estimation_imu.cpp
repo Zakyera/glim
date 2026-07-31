@@ -22,6 +22,8 @@
 #include <glim/odometry/callbacks.hpp>
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 
 #ifdef GTSAM_USE_TBB
 #include <tbb/task_arena.h>
@@ -34,6 +36,69 @@ using Callbacks = OdometryEstimationCallbacks;
 using gtsam::symbol_shorthand::B;  // IMU bias
 using gtsam::symbol_shorthand::V;  // IMU velocity   (v_world_imu)
 using gtsam::symbol_shorthand::X;  // IMU pose       (T_world_imu)
+
+namespace {
+
+constexpr double kRadToDeg = 180.0 / M_PI;
+
+double poseRotationDeg(const Eigen::Isometry3d& pose) {
+  const Eigen::Matrix3d rotation =
+    Eigen::Quaterniond(pose.linear()).normalized().toRotationMatrix();
+  return Eigen::AngleAxisd(rotation).angle() * kRadToDeg;
+}
+
+void logPoseStageRow(
+  double stamp,
+  int current,
+  int last,
+  int num_imu_integrated,
+  const Eigen::Isometry3d& last_T_world_imu,
+  const Eigen::Isometry3d& imu_pred_T_world_imu,
+  const Eigen::Isometry3d& scan_T_world_imu,
+  const Eigen::Isometry3d& smoother_T_world_imu) {
+  const Eigen::Isometry3d last_to_imu_pred =
+    last_T_world_imu.inverse() * imu_pred_T_world_imu;
+  const Eigen::Isometry3d last_to_scan =
+    last_T_world_imu.inverse() * scan_T_world_imu;
+  const Eigen::Isometry3d last_to_smoother =
+    last_T_world_imu.inverse() * smoother_T_world_imu;
+  const Eigen::Isometry3d scan_minus_imu =
+    imu_pred_T_world_imu.inverse() * scan_T_world_imu;
+  const Eigen::Isometry3d smoother_minus_scan =
+    scan_T_world_imu.inverse() * smoother_T_world_imu;
+  const Eigen::Isometry3d smoother_minus_imu =
+    imu_pred_T_world_imu.inverse() * smoother_T_world_imu;
+
+  spdlog::info(
+    "GLIM_POSE_STAGE_ROW,{:.9f},{},{},{},{:.9f},{:.9f},{:.9f},{:.9f},{:.9f},{:.9f},{:.9f},{:.9f},{:.9f},{:.9f},{:.9f},{:.9f},{:.9f},{:.9f},{:.9f},{:.9f},{:.9f},{:.9f},{:.9f},{:.9f},{:.9f}",
+    stamp,
+    current,
+    last,
+    num_imu_integrated,
+    last_to_imu_pred.translation().norm(),
+    poseRotationDeg(last_to_imu_pred),
+    last_to_scan.translation().norm(),
+    poseRotationDeg(last_to_scan),
+    last_to_smoother.translation().norm(),
+    poseRotationDeg(last_to_smoother),
+    scan_minus_imu.translation().norm(),
+    poseRotationDeg(scan_minus_imu),
+    smoother_minus_scan.translation().norm(),
+    poseRotationDeg(smoother_minus_scan),
+    smoother_minus_imu.translation().norm(),
+    poseRotationDeg(smoother_minus_imu),
+    imu_pred_T_world_imu.translation().x(),
+    imu_pred_T_world_imu.translation().y(),
+    imu_pred_T_world_imu.translation().z(),
+    scan_T_world_imu.translation().x(),
+    scan_T_world_imu.translation().y(),
+    scan_T_world_imu.translation().z(),
+    smoother_T_world_imu.translation().x(),
+    smoother_T_world_imu.translation().y(),
+    smoother_T_world_imu.translation().z());
+}
+
+}  // namespace
 
 OdometryEstimationIMUParams::OdometryEstimationIMUParams() {
   // sensor config
@@ -354,6 +419,7 @@ EstimationFrame::ConstPtr OdometryEstimationIMU::insert_frame(const Preprocessed
   const auto create_factors_start = TimingClock::now();
   new_factors.add(create_factors(current, imu_factor, new_values));
   const double create_factors_ms = timing ? timing_elapsed_ms(create_factors_start) : 0.0;
+  const Eigen::Isometry3d scan_T_world_imu_before_smoother = new_frame->T_world_imu;
 
   // Update smoother
   const auto pre_smoother_callback_start = TimingClock::now();
@@ -392,6 +458,15 @@ EstimationFrame::ConstPtr OdometryEstimationIMU::insert_frame(const Preprocessed
   const auto update_frames_start = TimingClock::now();
   update_frames(current, new_factors);
   const double update_frames_ms = timing ? timing_elapsed_ms(update_frames_start) : 0.0;
+  logPoseStageRow(
+    raw_frame->stamp,
+    current,
+    last,
+    num_imu_integrated,
+    Eigen::Isometry3d(last_T_world_imu.matrix()),
+    Eigen::Isometry3d(predicted_T_world_imu.matrix()),
+    scan_T_world_imu_before_smoother,
+    new_frame->T_world_imu);
 
   // Check if IMU prediction is good or not
   const auto imu_validation_start = TimingClock::now();

@@ -5,6 +5,7 @@
 #include <gtsam/inference/Factor.h>
 #include <glim/util/callback_slot.hpp>
 #include <glim/odometry/estimation_frame.hpp>
+#include <glim/odometry/scan_dcreg_diagnostics.hpp>
 
 #ifdef GLIM_USE_OPENCV
 namespace cv {
@@ -164,6 +165,15 @@ struct OdometryEstimationCallbacks {
    * @brief Odometry estimation timing callback.
    */
   static CallbackSlot<void(const OdometryTimingStatus& timing)> on_timing;
+
+  /**
+   * @brief Read-only DCReg-style LiDAR scan degeneracy diagnostic callback.
+   *
+   * This callback reports local-tangent Schur spectra only. It does not alter
+   * the optimizer, factors, weights, or state.
+   */
+  static CallbackSlot<void(const ScanDcregDiagnostics& diagnostics)>
+    on_scan_dcreg_diagnostics;
 
   /**
    * @brief Smoother corruption callback

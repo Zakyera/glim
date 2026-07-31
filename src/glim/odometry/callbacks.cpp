@@ -29,6 +29,9 @@ CallbackSlot<void(gtsam_points::IncrementalFixedLagSmootherExtWithFallback& smoo
 
 CallbackSlot<void(const OdometryTimingStatus& timing)> OdometryEstimationCallbacks::on_timing;
 
+CallbackSlot<void(const ScanDcregDiagnostics& diagnostics)>
+  OdometryEstimationCallbacks::on_scan_dcreg_diagnostics;
+
 CallbackSlot<void(double)> OdometryEstimationCallbacks::on_smoother_corruption;
 
 }  // namespace glim
