@@ -1,15 +1,20 @@
 #include <glim/odometry/odometry_estimation_cpu.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <cstdlib>
+#include <iomanip>
 #include <limits>
 #include <sstream>
+#include <stdexcept>
 
 #include <Eigen/Eigenvalues>
 
 #include <spdlog/spdlog.h>
 
 #include <gtsam/inference/Symbol.h>
+#include <gtsam/linear/GaussianFactorGraph.h>
 #include <gtsam/slam/BetweenFactor.h>
 #include <gtsam/nonlinear/LinearContainerFactor.h>
 
@@ -175,6 +180,387 @@ HessianHealthMetrics scanHessianHealthMetrics(const gtsam::NonlinearFactorGraph&
   return metrics;
 }
 
+template <typename T>
+void readNestedConfigIfPresent(
+  const Config& config,
+  const std::vector<std::string>& modules,
+  const std::string& name,
+  T* value) {
+  const auto found = config.param_nested<T>(modules, name);
+  if (found) {
+    *value = *found;
+  }
+}
+
+bool loadScanDcregHealthConfig(
+  const Config& config,
+  ScanDcregHealthConfig* output,
+  bool* section_present,
+  std::string* error) {
+  *output = ScanDcregHealthConfig();
+  *section_present = false;
+  try {
+    const std::vector<std::string> root = {
+      "odometry_estimation", "dcreg_health"};
+    const auto mode_value =
+      config.param_nested<std::string>(root, "mode");
+    if (!mode_value) {
+      return true;
+    }
+    *section_present = true;
+    if (!parseScanDcregMode(*mode_value, &output->mode)) {
+      *error = "unsupported dcreg_health mode '" +
+               *mode_value + "'";
+      output->mode = ScanDcregMode::Off;
+      return false;
+    }
+
+    const std::vector<std::string> detection = {
+      "odometry_estimation", "dcreg_health", "detection"};
+    readNestedConfigIfPresent(
+      config,
+      detection,
+      "degeneracy_condition_threshold",
+      &output->detection.degeneracy_condition_threshold);
+    readNestedConfigIfPresent(
+      config,
+      detection,
+      "epsilon_absolute",
+      &output->detection.epsilon_absolute);
+    readNestedConfigIfPresent(
+      config,
+      detection,
+      "epsilon_relative",
+      &output->detection.epsilon_relative);
+    readNestedConfigIfPresent(
+      config,
+      detection,
+      "pseudoinverse_relative_threshold",
+      &output->detection.pseudoinverse_relative_threshold);
+    readNestedConfigIfPresent(
+      config,
+      detection,
+      "negative_eigenvalue_tolerance",
+      &output->detection.negative_eigenvalue_tolerance);
+    readNestedConfigIfPresent(
+      config,
+      detection,
+      "spectral_cluster_relative_gap",
+      &output->detection.spectral_cluster_relative_gap);
+    readNestedConfigIfPresent(
+      config,
+      detection,
+      "minimum_axis_alignment_confidence",
+      &output->detection.minimum_axis_alignment_confidence);
+
+    const std::vector<std::string> reference = {
+      "odometry_estimation", "dcreg_health", "reference"};
+    output->reference.bootstrap_max_rotation_condition_ratio =
+      output->detection.degeneracy_condition_threshold;
+    output->reference.bootstrap_max_translation_condition_ratio =
+      output->detection.degeneracy_condition_threshold;
+    std::string reference_source =
+      scanDcregReferenceSourceName(output->reference.source);
+    readNestedConfigIfPresent(
+      config, reference, "source", &reference_source);
+    if (!parseScanDcregReferenceSource(
+          reference_source, &output->reference.source)) {
+      *error = "unsupported dcreg_health reference source '" +
+               reference_source + "'";
+      output->mode = ScanDcregMode::Off;
+      return false;
+    }
+    readNestedConfigIfPresent(
+      config,
+      reference,
+      "offline_profile_path",
+      &output->reference.offline_profile_path);
+    readNestedConfigIfPresent(
+      config,
+      reference,
+      "sensor_identifier",
+      &output->reference.sensor_identifier);
+    readNestedConfigIfPresent(
+      config,
+      reference,
+      "require_profile_metadata_match",
+      &output->reference.require_profile_metadata_match);
+    readNestedConfigIfPresent(
+      config,
+      reference,
+      "bootstrap_minimum_samples",
+      &output->reference.bootstrap_minimum_samples);
+    readNestedConfigIfPresent(
+      config,
+      reference,
+      "bootstrap_window_size",
+      &output->reference.bootstrap_window_size);
+    const auto legacy_bootstrap_limit =
+      config.param_nested<double>(
+        reference, "bootstrap_max_condition_ratio");
+    if (legacy_bootstrap_limit) {
+      spdlog::warn(
+        "dcreg_health.reference.bootstrap_max_condition_ratio is "
+        "deprecated and ignored; use the separate rotation and "
+        "translation limits");
+    }
+    readNestedConfigIfPresent(
+      config,
+      reference,
+      "bootstrap_max_rotation_condition_ratio",
+      &output->reference
+         .bootstrap_max_rotation_condition_ratio);
+    readNestedConfigIfPresent(
+      config,
+      reference,
+      "bootstrap_max_translation_condition_ratio",
+      &output->reference
+         .bootstrap_max_translation_condition_ratio);
+    readNestedConfigIfPresent(
+      config,
+      reference,
+      "temporal_stability_max_log_ratio_range",
+      &output->reference.temporal_stability_max_log_ratio_range);
+    readNestedConfigIfPresent(
+      config,
+      reference,
+      "adaptation_enabled",
+      &output->reference.adaptation_enabled);
+    readNestedConfigIfPresent(
+      config,
+      reference,
+      "adaptation_rate",
+      &output->reference.adaptation_rate);
+    readNestedConfigIfPresent(
+      config,
+      reference,
+      "freeze_during_degradation",
+      &output->reference.freeze_during_degradation);
+    readNestedConfigIfPresent(
+      config,
+      reference,
+      "maximum_reference_change_ratio",
+      &output->reference.maximum_reference_change_ratio);
+    readNestedConfigIfPresent(
+      config,
+      reference,
+      "offline_nominal_mad_multiplier",
+      &output->reference.offline_nominal_mad_multiplier);
+    readNestedConfigIfPresent(
+      config,
+      reference,
+      "offline_nominal_min_log_half_width",
+      &output->reference.offline_nominal_min_log_half_width);
+    readNestedConfigIfPresent(
+      config,
+      reference,
+      "require_glim_initialized",
+      &output->reference.require_glim_initialized);
+    readNestedConfigIfPresent(
+      config,
+      reference,
+      "require_registration_converged",
+      &output->reference.require_registration_converged);
+    readNestedConfigIfPresent(
+      config,
+      reference,
+      "require_linear_solve_success",
+      &output->reference.require_linear_solve_success);
+    readNestedConfigIfPresent(
+      config,
+      reference,
+      "minimum_source_point_count",
+      &output->reference.minimum_source_point_count);
+    readNestedConfigIfPresent(
+      config,
+      reference,
+      "minimum_inlier_count",
+      &output->reference.minimum_inlier_count);
+    readNestedConfigIfPresent(
+      config,
+      reference,
+      "minimum_inlier_fraction",
+      &output->reference.minimum_inlier_fraction);
+    readNestedConfigIfPresent(
+      config,
+      reference,
+      "maximum_initial_cost",
+      &output->reference.maximum_initial_cost);
+    readNestedConfigIfPresent(
+      config,
+      reference,
+      "maximum_final_cost",
+      &output->reference.maximum_final_cost);
+    readNestedConfigIfPresent(
+      config,
+      reference,
+      "minimum_relative_cost_reduction",
+      &output->reference.minimum_relative_cost_reduction);
+    readNestedConfigIfPresent(
+      config,
+      reference,
+      "require_axis_alignment_confidence",
+      &output->reference.require_axis_alignment_confidence);
+    readNestedConfigIfPresent(
+      config,
+      reference,
+      "reject_clustered_modes",
+      &output->reference.reject_clustered_modes);
+
+    const std::vector<std::string> temporal = {
+      "odometry_estimation", "dcreg_health", "temporal"};
+    readNestedConfigIfPresent(
+      config,
+      temporal,
+      "enabled",
+      &output->temporal.enabled);
+    readNestedConfigIfPresent(
+      config,
+      temporal,
+      "smoothing_alpha",
+      &output->temporal.smoothing_alpha);
+    readNestedConfigIfPresent(
+      config,
+      temporal,
+      "health_enter_threshold",
+      &output->temporal.health_enter_threshold);
+    readNestedConfigIfPresent(
+      config,
+      temporal,
+      "health_exit_threshold",
+      &output->temporal.health_exit_threshold);
+    readNestedConfigIfPresent(
+      config,
+      temporal,
+      "bad_frames_required",
+      &output->temporal.bad_frames_required);
+    readNestedConfigIfPresent(
+      config,
+      temporal,
+      "good_frames_required",
+      &output->temporal.good_frames_required);
+    std::string invalid_frame_policy =
+      scanDcregInvalidFramePolicyName(
+        output->temporal.invalid_frame_policy);
+    readNestedConfigIfPresent(
+      config,
+      temporal,
+      "invalid_frame_policy",
+      &invalid_frame_policy);
+    if (!parseScanDcregInvalidFramePolicy(
+          invalid_frame_policy,
+          &output->temporal.invalid_frame_policy)) {
+      *error =
+        "unsupported dcreg_health invalid_frame_policy '" +
+        invalid_frame_policy + "'";
+      output->mode = ScanDcregMode::Off;
+      return false;
+    }
+
+    const std::vector<std::string> support = {
+      "odometry_estimation", "dcreg_health", "support"};
+    readNestedConfigIfPresent(
+      config,
+      support,
+      "combine_with_shape_health",
+      &output->combine_support_with_shape_health);
+
+    const std::vector<std::string> logging = {
+      "odometry_estimation", "dcreg_health", "logging"};
+    readNestedConfigIfPresent(
+      config,
+      logging,
+      "enabled",
+      &output->logging.enabled);
+    readNestedConfigIfPresent(
+      config,
+      logging,
+      "csv_path",
+      &output->logging.csv_path);
+    readNestedConfigIfPresent(
+      config,
+      logging,
+      "log_every_n_frames",
+      &output->logging.log_every_n_frames);
+    readNestedConfigIfPresent(
+      config,
+      logging,
+      "asynchronous",
+      &output->logging.asynchronous);
+    int queue_capacity =
+      static_cast<int>(output->logging.queue_capacity);
+    readNestedConfigIfPresent(
+      config,
+      logging,
+      "queue_capacity",
+      &queue_capacity);
+    output->logging.queue_capacity =
+      queue_capacity > 0
+        ? static_cast<std::size_t>(queue_capacity)
+        : 0u;
+    readNestedConfigIfPresent(
+      config,
+      logging,
+      "flush_every_n_rows",
+      &output->logging.flush_every_n_rows);
+
+    if (!validateScanDcregHealthConfig(*output, error)) {
+      output->mode = ScanDcregMode::Off;
+      return false;
+    }
+    return true;
+  } catch (const std::exception& exception) {
+    *error = std::string("failed to parse dcreg_health: ") +
+             exception.what();
+    output->mode = ScanDcregMode::Off;
+    return false;
+  }
+}
+
+bool extractUnaryPoseHessian(
+  const gtsam::NonlinearFactor::shared_ptr& factor,
+  const gtsam::Values& values,
+  const gtsam::Key expected_key,
+  Eigen::Matrix<double, 6, 6>* hessian,
+  std::string* invalid_reason) {
+  try {
+    if (!factor || factor->keys().size() != 1u ||
+        factor->keys().front() != expected_key) {
+      *invalid_reason =
+        "factor_is_not_unary_on_current_pose";
+      return false;
+    }
+    const gtsam::GaussianFactor::shared_ptr linearized =
+      factor->linearize(values);
+    if (!linearized) {
+      *invalid_reason = "factor_linearization_failed";
+      return false;
+    }
+    gtsam::GaussianFactorGraph graph;
+    graph.push_back(linearized);
+    const auto blocks = graph.hessianBlockDiagonal();
+    const auto found = blocks.find(expected_key);
+    if (found == blocks.end() ||
+        found->second.rows() != 6 ||
+        found->second.cols() != 6 ||
+        !found->second.allFinite()) {
+      *invalid_reason =
+        "factor_hessian_block_missing_or_invalid";
+      return false;
+    }
+    *hessian =
+      0.5 *
+      (found->second.template cast<double>() +
+       found->second.transpose().template cast<double>());
+    return hessian->allFinite();
+  } catch (const std::exception& exception) {
+    *invalid_reason =
+      std::string("factor_hessian_exception:") +
+      exception.what();
+    return false;
+  }
+}
+
 }  // namespace
 
 OdometryEstimationCPUParams::OdometryEstimationCPUParams() : OdometryEstimationIMUParams() {
@@ -206,12 +592,35 @@ OdometryEstimationCPUParams::OdometryEstimationCPUParams() : OdometryEstimationI
   scan_health_hessian_min_ratio_bad = config.param<double>("odometry_estimation", "scan_health_hessian_min_ratio_bad", 0.1);
   scan_health_hessian_frobenius_ratio_good = config.param<double>("odometry_estimation", "scan_health_hessian_frobenius_ratio_good", 0.5);
   scan_health_hessian_frobenius_ratio_bad = config.param<double>("odometry_estimation", "scan_health_hessian_frobenius_ratio_bad", 0.1);
-  scan_dcreg_diagnostics_enable =
-    config.param<bool>("odometry_estimation", "scan_dcreg_diagnostics_enable", false);
-  scan_dcreg_condition_threshold =
-    config.param<double>("odometry_estimation", "scan_dcreg_condition_threshold", 10.0);
-  scan_dcreg_spectral_ratio_cap =
-    config.param<double>("odometry_estimation", "scan_dcreg_spectral_ratio_cap", 1e12);
+  bool dcreg_section_present = false;
+  std::string dcreg_config_error;
+  if (!loadScanDcregHealthConfig(
+        config,
+        &dcreg_health,
+        &dcreg_section_present,
+        &dcreg_config_error)) {
+    spdlog::error(
+      "DCReg health configuration is invalid; disabling only the "
+      "passive sidecar: {}",
+      dcreg_config_error);
+    dcreg_health.mode = ScanDcregMode::Off;
+  }
+  const auto legacy_dcreg_enabled =
+    config.param<bool>(
+      "odometry_estimation",
+      "scan_dcreg_diagnostics_enable");
+  if (legacy_dcreg_enabled && *legacy_dcreg_enabled) {
+    if (dcreg_section_present &&
+        dcreg_health.mode == ScanDcregMode::LogOnly) {
+      spdlog::warn(
+        "legacy scan_dcreg_diagnostics_enable is ignored because "
+        "dcreg_health.mode=log_only is authoritative");
+    } else {
+      spdlog::warn(
+        "legacy scan_dcreg_diagnostics_enable is ignored; the optional "
+        "dcreg_health section is absent or off, so the sidecar remains off");
+    }
+  }
 
   ivox_resolution = config.param<double>("odometry_estimation", "ivox_resolution", 0.5);
   ivox_min_dist = config.param<double>("odometry_estimation", "ivox_min_dist", 0.1);
@@ -225,6 +634,65 @@ OdometryEstimationCPUParams::~OdometryEstimationCPUParams() {}
 
 OdometryEstimationCPU::OdometryEstimationCPU(const OdometryEstimationCPUParams& params) : OdometryEstimationIMU(std::make_unique<OdometryEstimationCPUParams>(params)) {
   last_T_target_imu.setIdentity();
+  ScanDcregTestVariant dcreg_test_variant =
+    ScanDcregTestVariant::FullLogOnly;
+  bool dcreg_test_variant_valid = true;
+  if (params.dcreg_health.mode == ScanDcregMode::LogOnly) {
+    const char* test_variant =
+      std::getenv("GLIM_DCREG_TEST_VARIANT");
+    if (test_variant != nullptr && test_variant[0] != '\0') {
+      dcreg_test_variant_valid = parseScanDcregTestVariant(
+        test_variant, &dcreg_test_variant);
+      if (!dcreg_test_variant_valid) {
+        spdlog::error(
+          "invalid test-only GLIM_DCREG_TEST_VARIANT='{}'; "
+          "disabling the passive sidecar",
+          test_variant);
+      } else {
+        spdlog::warn(
+          "Stage 1.8 test-only DCReg scheduling variant enabled: {}",
+          scanDcregTestVariantName(dcreg_test_variant));
+      }
+    }
+  }
+  if (scanDcregModeCreatesMonitor(params.dcreg_health.mode) &&
+      dcreg_test_variant_valid) {
+    ScanDcregRuntimeMetadata metadata;
+    metadata.sensor_identifier =
+      params.dcreg_health.reference.sensor_identifier;
+    metadata.registration_type = params.registration_type;
+    if (params.registration_type == "VGICP") {
+      for (int level = 0; level < params.vgicp_voxelmap_levels; ++level) {
+        metadata.voxel_resolutions.push_back(
+          params.vgicp_resolution *
+          std::pow(params.vgicp_voxelmap_scaling_factor, level));
+      }
+    } else {
+      metadata.voxel_resolutions.push_back(params.ivox_resolution);
+    }
+    std::ostringstream fingerprint;
+    fingerprint << std::setprecision(17)
+                << params.registration_type << "|"
+                << params.num_threads << "|"
+                << params.dcreg_health.detection.epsilon_absolute << "|"
+                << params.dcreg_health.detection.epsilon_relative << "|"
+                << params.dcreg_health.detection
+                     .pseudoinverse_relative_threshold;
+    for (const double resolution : metadata.voxel_resolutions) {
+      fingerprint << "|" << resolution;
+    }
+    metadata.configuration_fingerprint = fingerprint.str();
+    dcreg_health_monitor =
+      std::make_unique<ScanDcregHealthMonitor>(
+        params.dcreg_health, metadata, dcreg_test_variant);
+    spdlog::info(
+      "DCReg observability-health sidecar mode=log_only, "
+      "test_variant={}, reference_source={}, estimator control disabled",
+      scanDcregTestVariantName(
+        dcreg_test_variant),
+      scanDcregReferenceSourceName(
+        params.dcreg_health.reference.source));
+  }
   if (params.registration_type == "GICP") {
     target_ivox.reset(new gtsam_points::iVox(params.ivox_resolution));
     target_ivox->voxel_insertion_setting().set_min_dist_in_cell(params.ivox_min_dist);
@@ -294,6 +762,7 @@ gtsam::NonlinearFactorGraph OdometryEstimationCPU::create_factors(const int curr
   double lm_cost_change = nanValue();
   double lm_lambda = nanValue();
   bool lm_solve_success = false;
+  bool registration_converged = false;
   double lm_linearization_time = nanValue();
   double lm_linear_solver_time = nanValue();
   lm_params.callback = [&](const gtsam_points::LevenbergMarquardtOptimizationStatus& status, const gtsam::Values&) {
@@ -321,10 +790,35 @@ gtsam::NonlinearFactorGraph OdometryEstimationCPU::create_factors(const int curr
       return false;
     }
 
-    // Convergence check
-    return delta_t < 1e-3 && delta_r < 1e-3 * M_PI / 180.0;
+    // Preserve the existing convergence check and only observe its result.
+    const bool pose_increment_converged =
+      delta_t < 1e-3 &&
+      delta_r < 1e-3 * M_PI / 180.0;
+    registration_converged =
+      registration_converged || pose_increment_converged;
+    return pose_increment_converged;
   };
 
+  std::vector<double> dcreg_initial_factor_costs;
+  double dcreg_initial_cost_elapsed_ms = 0.0;
+  if (dcreg_health_monitor) {
+    const auto dcreg_initial_cost_start =
+      std::chrono::steady_clock::now();
+    dcreg_initial_factor_costs.reserve(
+      matching_cost_factors.size());
+    for (const auto& factor : matching_cost_factors) {
+      try {
+        dcreg_initial_factor_costs.push_back(
+          factor ? factor->error(values) : nanValue());
+      } catch (const std::exception&) {
+        dcreg_initial_factor_costs.push_back(nanValue());
+      }
+    }
+    dcreg_initial_cost_elapsed_ms =
+      std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() -
+        dcreg_initial_cost_start).count();
+  }
   const double scan_initial_error = matching_cost_factors.error(values);
 
   // Optimize
@@ -350,18 +844,127 @@ gtsam::NonlinearFactorGraph OdometryEstimationCPU::create_factors(const int curr
 
   const Eigen::Isometry3d scan_correction = pred_T_target_imu.inverse() * T_target_imu;
   const Eigen::Isometry3d scan_minus_imu = pred_T_last_current.inverse() * T_last_current;
-  const HessianHealthMetrics hessian_metrics = scanHessianHealthMetrics(matching_cost_factors, values, X(current));
-  ScanDcregDiagnostics dcreg_diagnostics;
-  if (params->scan_dcreg_diagnostics_enable &&
-      hessian_metrics.pose_hessian_valid) {
-    dcreg_diagnostics = analyzeScanDcregHessian(
-      hessian_metrics.pose_hessian,
-      params->scan_dcreg_condition_threshold,
-      params->scan_dcreg_spectral_ratio_cap);
-  }
-  dcreg_diagnostics.stamp_sec = frames[current]->stamp;
-  dcreg_diagnostics.frame_index = static_cast<std::size_t>(current);
   const size_t preprocessed_points = frames[current]->frame ? frames[current]->frame->size() : 0u;
+  // Preserve the pre-Stage-1 scan-health path exactly. This is separate from
+  // dcreg_health; mode=off does not collect any Hessian for the new sidecar.
+  const HessianHealthMetrics hessian_metrics =
+    scanHessianHealthMetrics(
+      matching_cost_factors, values, X(current));
+
+  ScanDcregDiagnostics dcreg_diagnostics;
+  if (dcreg_health_monitor) {
+    const auto dcreg_snapshot_start =
+      std::chrono::steady_clock::now();
+    ScanDcregMonitorInput monitor_input;
+    monitor_input.stamp_sec = frames[current]->stamp;
+    monitor_input.frame_index =
+      static_cast<std::size_t>(current);
+    monitor_input.T_world_imu =
+      frames[last]->T_world_imu * T_last_current;
+    monitor_input.glim_initialized = true;
+    monitor_input.registration_converged =
+      registration_converged;
+    monitor_input.linear_solve_success = lm_solve_success;
+    monitor_input.source_point_count =
+      static_cast<int>(preprocessed_points);
+    monitor_input.initial_cost = scan_initial_error;
+    monitor_input.final_cost = scan_final_error;
+    monitor_input.factors.reserve(matching_cost_factors.size());
+
+    for (std::size_t factor_index = 0u;
+         factor_index < matching_cost_factors.size();
+         ++factor_index) {
+      ScanDcregFactorInput factor_input;
+      factor_input.factor_index =
+        static_cast<int>(factor_index);
+      factor_input.source_point_count =
+        static_cast<int>(preprocessed_points);
+      factor_input.initial_cost =
+        factor_index < dcreg_initial_factor_costs.size()
+          ? dcreg_initial_factor_costs[factor_index]
+          : nanValue();
+
+      const auto& factor =
+        matching_cost_factors.at(factor_index);
+      try {
+        factor_input.final_cost =
+          factor ? factor->error(values) : nanValue();
+      } catch (const std::exception& exception) {
+        factor_input.final_cost = nanValue();
+        factor_input.invalid_reason =
+          std::string("factor_final_cost_exception:") +
+          exception.what();
+      }
+      factor_input.hessian_valid =
+        extractUnaryPoseHessian(
+          factor,
+          values,
+          X(current),
+          &factor_input.hessian,
+          &factor_input.invalid_reason);
+
+      if (const auto* vgicp =
+            dynamic_cast<
+              const gtsam_points::IntegratedVGICPFactor*>(
+                factor.get())) {
+        factor_input.resolution =
+          vgicp->get_target()
+            ? vgicp->get_target()->voxel_resolution()
+            : nanValue();
+        if (factor_input.hessian_valid) {
+          factor_input.inlier_count = vgicp->num_inliers();
+          factor_input.inlier_fraction =
+            preprocessed_points > 0u
+              ? vgicp->inlier_fraction()
+              : 0.0;
+        }
+      } else {
+        using IvoxGicpFactor =
+          gtsam_points::IntegratedGICPFactor_<
+            gtsam_points::iVox,
+            gtsam_points::PointCloud>;
+        if (const auto* gicp =
+              dynamic_cast<const IvoxGicpFactor*>(
+                factor.get())) {
+          factor_input.resolution =
+            params->ivox_resolution;
+          if (factor_input.hessian_valid &&
+              preprocessed_points > 0u) {
+            factor_input.inlier_fraction =
+              gicp->inlier_fraction();
+            factor_input.inlier_count =
+              static_cast<int>(std::llround(
+                factor_input.inlier_fraction *
+                static_cast<double>(preprocessed_points)));
+          }
+        } else if (factor_input.invalid_reason.empty()) {
+          factor_input.invalid_reason =
+            "unsupported_matching_factor_type";
+          factor_input.hessian_valid = false;
+        }
+      }
+      monitor_input.factors.push_back(
+        std::move(factor_input));
+    }
+
+    const double snapshot_elapsed_ms =
+      std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() -
+        dcreg_snapshot_start).count();
+    dcreg_health_monitor->recordProducerTiming(
+      dcreg_initial_cost_elapsed_ms,
+      snapshot_elapsed_ms);
+
+    try {
+      dcreg_diagnostics =
+        dcreg_health_monitor->process(monitor_input);
+    } catch (const std::exception& exception) {
+      spdlog::error(
+        "passive DCReg health monitor failed at frame {}: {}",
+        current,
+        exception.what());
+    }
+  }
   const bool scan_health_reference_ready = scan_health_reference_count >= params->scan_health_reference_min_frames;
   const double point_reference = scan_health_point_reference;
   const double hessian_min_reference = scan_health_hessian_min_reference;
@@ -472,67 +1075,8 @@ gtsam::NonlinearFactorGraph OdometryEstimationCPU::create_factors(const int curr
   frames[current]->T_world_imu = frames[last]->T_world_imu * T_last_current;
   new_values.insert_or_assign(X(current), gtsam::Pose3(frames[current]->T_world_imu.matrix()));
 
-  if (params->scan_dcreg_diagnostics_enable) {
+  if (dcreg_diagnostics.enabled) {
     dcreg_diagnostics.T_world_imu = frames[current]->T_world_imu;
-    spdlog::info(
-      "GLIM_SCAN_DCREG_ROW,{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
-      dcreg_diagnostics.stamp_sec,
-      dcreg_diagnostics.frame_index,
-      params->registration_type,
-      dcreg_diagnostics.valid ? 1 : 0,
-      scanDcregStatusName(dcreg_diagnostics.status),
-      dcreg_diagnostics.condition_threshold,
-      dcreg_diagnostics.translation_block_rank,
-      dcreg_diagnostics.rotation_block_rank,
-      dcreg_diagnostics.rotation_negative_eigenvalues,
-      dcreg_diagnostics.translation_negative_eigenvalues,
-      dcreg_diagnostics.rotation_condition,
-      dcreg_diagnostics.translation_condition,
-      dcreg_diagnostics.rotation_eigenvalues[0],
-      dcreg_diagnostics.rotation_eigenvalues[1],
-      dcreg_diagnostics.rotation_eigenvalues[2],
-      dcreg_diagnostics.translation_eigenvalues[0],
-      dcreg_diagnostics.translation_eigenvalues[1],
-      dcreg_diagnostics.translation_eigenvalues[2],
-      dcreg_diagnostics.rotation_spectral_ratios[0],
-      dcreg_diagnostics.rotation_spectral_ratios[1],
-      dcreg_diagnostics.rotation_spectral_ratios[2],
-      dcreg_diagnostics.translation_spectral_ratios[0],
-      dcreg_diagnostics.translation_spectral_ratios[1],
-      dcreg_diagnostics.translation_spectral_ratios[2],
-      dcreg_diagnostics.rotation_axis_weakness[0],
-      dcreg_diagnostics.rotation_axis_weakness[1],
-      dcreg_diagnostics.rotation_axis_weakness[2],
-      dcreg_diagnostics.translation_axis_weakness[0],
-      dcreg_diagnostics.translation_axis_weakness[1],
-      dcreg_diagnostics.translation_axis_weakness[2],
-      dcreg_diagnostics.rotation_weak_modes[0],
-      dcreg_diagnostics.rotation_weak_modes[1],
-      dcreg_diagnostics.rotation_weak_modes[2],
-      dcreg_diagnostics.translation_weak_modes[0],
-      dcreg_diagnostics.translation_weak_modes[1],
-      dcreg_diagnostics.translation_weak_modes[2]);
-    std::ostringstream basis_row;
-    basis_row.precision(17);
-    basis_row << "GLIM_SCAN_DCREG_BASIS_ROW,"
-              << dcreg_diagnostics.stamp_sec << ","
-              << dcreg_diagnostics.frame_index;
-    // Eigenvectors are columns (modes), expressed in the target-pose local
-    // tangent frame. Keep this separate from the legacy diagnostic row so old
-    // report parsers remain compatible.
-    for (int mode = 0; mode < 3; ++mode) {
-      for (int axis = 0; axis < 3; ++axis) {
-        basis_row << ","
-                  << dcreg_diagnostics.rotation_eigenvectors(axis, mode);
-      }
-    }
-    for (int mode = 0; mode < 3; ++mode) {
-      for (int axis = 0; axis < 3; ++axis) {
-        basis_row << ","
-                  << dcreg_diagnostics.translation_eigenvectors(axis, mode);
-      }
-    }
-    spdlog::info(basis_row.str());
     Callbacks::on_scan_dcreg_diagnostics(dcreg_diagnostics);
   }
 

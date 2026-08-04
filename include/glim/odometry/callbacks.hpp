@@ -167,10 +167,11 @@ struct OdometryEstimationCallbacks {
   static CallbackSlot<void(const OdometryTimingStatus& timing)> on_timing;
 
   /**
-   * @brief Read-only DCReg-style LiDAR scan degeneracy diagnostic callback.
+   * @brief Read-only LiDAR observability-health diagnostic callback.
    *
-   * This callback reports local-tangent Schur spectra only. It does not alter
-   * the optimizer, factors, weights, or state.
+   * This callback reports per-resolution support, aggregate local-tangent
+   * Schur spectra, and relative directional health. It does not alter the
+   * optimizer, factors, weights, covariance, or state.
    */
   static CallbackSlot<void(const ScanDcregDiagnostics& diagnostics)>
     on_scan_dcreg_diagnostics;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <glim/odometry/odometry_estimation_imu.hpp>
+#include <glim/odometry/scan_dcreg_diagnostics.hpp>
 
 namespace gtsam_points {
 
@@ -50,9 +51,7 @@ public:
   double scan_health_hessian_min_ratio_bad;     ///< Hessian min-eigen ratio considered unhealthy
   double scan_health_hessian_frobenius_ratio_good;  ///< Hessian Frobenius ratio considered healthy
   double scan_health_hessian_frobenius_ratio_bad;   ///< Hessian Frobenius ratio considered unhealthy
-  bool scan_dcreg_diagnostics_enable;                ///< Publish read-only DCReg-style scan diagnostics
-  double scan_dcreg_condition_threshold;             ///< Weak-mode spectral-ratio threshold
-  double scan_dcreg_spectral_ratio_cap;              ///< Finite cap used for logging and visualization
+  ScanDcregHealthConfig dcreg_health;  ///< Passive LiDAR observability sidecar
 
   double ivox_resolution;  ///< iVox resolution (for GICP)
   double ivox_min_dist;    ///< Minimum distance between points in an iVox cell (for GICP)
@@ -86,6 +85,7 @@ private:
   std::vector<std::shared_ptr<gtsam_points::GaussianVoxelMapCPU>> target_voxelmaps;  ///< VGICP target voxelmap
   std::shared_ptr<gtsam_points::iVox> target_ivox;                                   ///< GICP target iVox
   EstimationFrame::ConstPtr target_ivox_frame;                                       ///< Target points (just for visualization)
+  std::unique_ptr<ScanDcregHealthMonitor> dcreg_health_monitor;                       ///< Optional passive log-only monitor
   int scan_health_reference_count = 0;                                                ///< Number of scan-health reference updates
   double scan_health_point_reference = -1.0;                                          ///< Healthy point-support reference
   double scan_health_hessian_min_reference = -1.0;                                    ///< Healthy Hessian min-eigen reference
