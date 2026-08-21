@@ -46,7 +46,7 @@ void NaiveInitialStateEstimation::insert_imu(double stamp, const Eigen::Vector3d
     return;
   }
 
-  stamp = stamp;
+  this->stamp = stamp;
   sum_acc += linear_acc;
 
   ready = stamp - init_stamp > window_size && sum_acc.squaredNorm() > 10.0;
