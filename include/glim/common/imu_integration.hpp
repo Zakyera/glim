@@ -7,6 +7,11 @@
 
 namespace glim {
 
+enum class IMUSampleSupport {
+  RIGHT,
+  LEFT,
+};
+
 /**
  * @brief IMU integration parameters
  */
@@ -18,6 +23,7 @@ struct IMUIntegrationParams {
   double acc_noise;   // Linear acceleration noise
   double gyro_noise;  // Angular velocity noise
   double int_noise;   // Integration noise
+  IMUSampleSupport sample_support;  // Experimental CPT7 support convention
 };
 
 /**
@@ -91,6 +97,7 @@ public:
   const std::deque<Eigen::Matrix<double, 7, 1>>& imu_data_in_queue() const;
 
 private:
+  IMUSampleSupport sample_support;
   std::shared_ptr<gtsam::PreintegratedImuMeasurements> imu_measurements;
   std::deque<Eigen::Matrix<double, 7, 1>> imu_queue;
 };

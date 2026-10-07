@@ -2,6 +2,10 @@
 
 #include <glim/util/config.hpp>
 
+#include <algorithm>
+#include <cstdlib>
+#include <stdexcept>
+
 namespace glim {
 
 IMUIntegrationParams::IMUIntegrationParams(const bool upright) {
@@ -11,11 +15,22 @@ IMUIntegrationParams::IMUIntegrationParams(const bool upright) {
   this->acc_noise = config_sensors.param<double>("sensors", "imu_acc_noise", 0.01);
   this->gyro_noise = config_sensors.param<double>("sensors", "imu_gyro_noise", 0.001);
   this->int_noise = config_sensors.param<double>("sensors", "imu_int_noise", 0.001);
+  this->sample_support = IMUSampleSupport::RIGHT;
+  if (const char* support = std::getenv("GLIM_IMU_SAMPLE_SUPPORT")) {
+    const std::string value(support);
+    if (value == "left") {
+      this->sample_support = IMUSampleSupport::LEFT;
+    } else if (value != "right" && value != "current") {
+      throw std::invalid_argument(
+        "GLIM_IMU_SAMPLE_SUPPORT must be current, left, or right");
+    }
+  }
 }
 
 IMUIntegrationParams::~IMUIntegrationParams() {}
 
 IMUIntegration::IMUIntegration(const IMUIntegrationParams& params) {
+  sample_support = params.sample_support;
   auto imu_params = gtsam::PreintegrationParams::MakeSharedU();
   if (!params.upright) {
     imu_params = gtsam::PreintegrationParams::MakeSharedD();
@@ -38,6 +53,19 @@ void IMUIntegration::insert_imu(double stamp, const Eigen::Vector3d& linear_acc,
 int IMUIntegration::integrate_imu(double start_time, double end_time, const gtsam::imuBias::ConstantBias& bias, int* num_integrated) {
   *num_integrated = 0;
   imu_measurements->resetIntegrationAndSetBias(bias);
+
+  if (sample_support == IMUSampleSupport::LEFT) {
+    std::vector<double> delta_times;
+    std::vector<Eigen::Matrix<double, 7, 1>> imu_data;
+    const int cursor = find_imu_data(start_time, end_time, delta_times, imu_data);
+    for (size_t i = 0; i < delta_times.size(); ++i) {
+      imu_measurements->integrateMeasurement(
+        imu_data[i].block<3, 1>(1, 0),
+        imu_data[i].block<3, 1>(4, 0), delta_times[i]);
+    }
+    *num_integrated = static_cast<int>(delta_times.size());
+    return cursor;
+  }
 
   int cursor = 0;
   auto imu_itr = imu_queue.begin();
@@ -92,6 +120,23 @@ int IMUIntegration::integrate_imu(
   pred_times.emplace_back(start_time);
   pred_poses.emplace_back(Eigen::Isometry3d(state.pose().matrix()));
 
+  if (sample_support == IMUSampleSupport::LEFT) {
+    std::vector<double> delta_times;
+    std::vector<Eigen::Matrix<double, 7, 1>> imu_data;
+    const int cursor = find_imu_data(start_time, end_time, delta_times, imu_data);
+    double predicted_time = start_time;
+    for (size_t i = 0; i < delta_times.size(); ++i) {
+      imu_measurements->integrateMeasurement(
+        imu_data[i].block<3, 1>(1, 0),
+        imu_data[i].block<3, 1>(4, 0), delta_times[i]);
+      predicted_time += delta_times[i];
+      const auto predicted = imu_measurements->predict(state, bias);
+      pred_times.emplace_back(predicted_time);
+      pred_poses.emplace_back(Eigen::Isometry3d(predicted.pose().matrix()));
+    }
+    return cursor;
+  }
+
   int cursor = 0;
   auto imu_itr = imu_queue.begin();
   double last_stamp = start_time;
@@ -141,6 +186,42 @@ int IMUIntegration::integrate_imu(
 
 int IMUIntegration::find_imu_data(double start_time, double end_time, std::vector<double>& delta_times, std::vector<Eigen::Matrix<double, 7, 1>>& imu_data) {
   //
+  if (sample_support == IMUSampleSupport::LEFT) {
+    if (imu_queue.empty()) {
+      return 0;
+    }
+    auto next = std::upper_bound(
+      imu_queue.begin(), imu_queue.end(), start_time,
+      [](double stamp, const Eigen::Matrix<double, 7, 1>& frame) {
+        return stamp < frame[0];
+      });
+    if (next == imu_queue.begin()) {
+      return 0;
+    }
+    size_t active =
+      static_cast<size_t>(std::distance(imu_queue.begin(), next) - 1);
+    double current = start_time;
+    while (current < end_time) {
+      const double next_stamp = active + 1 < imu_queue.size()
+        ? imu_queue[active + 1][0]
+        : end_time;
+      const double target = std::min(end_time, next_stamp);
+      const double dt = target - current;
+      if (dt <= 0.0) {
+        break;
+      }
+      delta_times.emplace_back(dt);
+      imu_data.emplace_back(imu_queue[active]);
+      current = target;
+      if (active + 1 < imu_queue.size() &&
+          current >= imu_queue[active + 1][0]) {
+        ++active;
+      }
+    }
+    // Erase only samples before the one active at end_time.
+    return static_cast<int>(active);
+  }
+
   int cursor = 0;
   auto imu_itr = imu_queue.begin();
   double last_stamp = start_time;
